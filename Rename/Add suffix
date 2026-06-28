@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""Add a suffix before each selected file's extension.
+
+  report.pdf + "-v2"  -> report-v2.pdf
+  file.tar.gz + "-v2" -> file.tar-v2.gz
+  .bashrc + "-v2"     -> .bashrc-v2     (pure dotfile: appended at end)
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _helpers import get_selected_paths, report, safe_rename, zenity_entry
+
+suffix = zenity_entry("Add suffix", "Suffix (inserted before extension):")
+if not suffix:
+    sys.exit()
+
+failed = 0
+for src in get_selected_paths():
+    dst = src.with_name(f"{src.stem}{suffix}{src.suffix}")
+    if not safe_rename(src, dst):
+        failed += 1
+
+report("Add suffix", {"Skipped (target exists)": failed})

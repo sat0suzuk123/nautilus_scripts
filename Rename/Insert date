@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Prepend a date to each selected file's name.
+
+Choices:
+  Today              -> 2026-04-30_<name>
+  Today (with time)  -> 2026-04-30_1530_<name>
+  File mtime         -> per-file modification date
+  Custom             -> user-supplied string
+"""
+import os
+import sys
+from datetime import datetime
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _helpers import get_selected_paths, report, safe_rename, zenity_entry, zenity_radio
+
+now = datetime.now()
+today = now.strftime("%Y-%m-%d")
+today_time = now.strftime("%Y-%m-%d_%H%M")
+
+choice = zenity_radio(
+    "Insert date",
+    "Which date to use?",
+    [
+        (True,  "Today",             today),
+        (False, "Today (with time)", today_time),
+        (False, "File mtime",        "per-file YYYY-MM-DD"),
+        (False, "Custom...",         "you type it"),
+    ],
+)
+if not choice:
+    sys.exit()
+
+if choice == "Today":
+    fixed = today
+elif choice == "Today (with time)":
+    fixed = today_time
+elif choice == "File mtime":
+    fixed = None
+elif choice == "Custom...":
+    fixed = zenity_entry("Insert date", "Date string:", today)
+    if not fixed:
+        sys.exit()
+else:
+    sys.exit()
+
+failed = 0
+for src in get_selected_paths():
+    d = fixed if fixed is not None else \
+        datetime.fromtimestamp(src.stat().st_mtime).strftime("%Y-%m-%d")
+    if not safe_rename(src, src.with_name(f"{d}_{src.name}")):
+        failed += 1
+
+report("Insert date", {"Skipped (target exists)": failed})

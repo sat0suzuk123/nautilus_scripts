@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Flatten each selected directory by one level.
+
+For each selected directory <D> with parent <P>:
+  P/D/foo.txt   -> P/D_foo.txt
+  P/D/subdir/   -> P/D_subdir/   (renamed wholesale, contents kept)
+
+Empty source directories are removed.
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _helpers import get_selected_paths, report, safe_rename, zenity_info
+
+flattened = 0
+failed = 0
+nonempty = 0
+skipped = 0
+
+for d in get_selected_paths():
+    if not d.is_dir() or d.is_symlink():
+        skipped += 1
+        continue
+    parent = d.parent
+    name = d.name
+    for entry in list(d.iterdir()):
+        if not safe_rename(entry, parent / f"{name}_{entry.name}"):
+            failed += 1
+    try:
+        d.rmdir()
+        flattened += 1
+    except OSError:
+        nonempty += 1
+
+report("Flatten directory", {
+    "Flattened": flattened,
+    "Skipped (target exists)": failed,
+    "Not removed (still non-empty)": nonempty,
+    "Skipped (not a directory / symlink)": skipped,
+})

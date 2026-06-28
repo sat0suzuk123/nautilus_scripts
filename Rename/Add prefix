@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""Add a prefix to each selected file's name."""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _helpers import get_selected_paths, report, safe_rename, zenity_entry
+
+prefix = zenity_entry("Add prefix", "Prefix to add:")
+if not prefix:
+    sys.exit()
+
+failed = 0
+for src in get_selected_paths():
+    if not safe_rename(src, src.with_name(prefix + src.name)):
+        failed += 1
+
+report("Add prefix", {"Skipped (target exists)": failed})
