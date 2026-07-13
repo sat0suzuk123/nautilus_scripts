@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Copy the text contents of the selected file(s) to the clipboard.
+
+Self-contained (no _helpers.py dependency) so it can live in any Scripts
+subfolder. Supports local files and GVFS-mounted URIs (smb://, sftp://, …),
+Wayland (wl-copy) and X11 (xclip / xsel).
+
+Behaviour:
+  * 1 text file   -> its raw contents go to the clipboard.
+  * N text files  -> contents are concatenated, each preceded by a
+                     `===== <name> =====` header.
+  * Directories   -> skipped (can't copy "contents").
+  * Binary files  -> skipped (not valid UTF-8 text).
+Directories/binaries/read-errors are counted and reported.
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import urllib.parse
+from pathlib import Path
+from urllib.parse import urlparse
+
+# Skip files larger than this to avoid stuffing the clipboard with a huge blob.
+MAX_BYTES_PER_FILE = 10 * 1024 * 1024  # 10 MiB
+
+
+# --------------------------------------------------------------------------- #
+# Selection -> local paths (mirrors _helpers.get_selected_paths)
+# --------------------------------------------------------------------------- #
+def _smb_uri_to_path(uri: str) -> Path:
+    """smb://host/share/path -> /run/user/$UID/gvfs/smb-share:server=host,share=share/path"""
+    p = urlparse(uri)
+    host = p.netloc
+    raw = p.path.lstrip("/")
+    if not raw:
+        raise ValueError(f"smb URI missing share: {uri}")
+    share, _, rest = raw.partition("/")
+    share = urllib.parse.unquote(share)
+    rest = urllib.parse.unquote(rest)
+    base = Path(f"/run/user/{os.getuid()}/gvfs/smb-share:server={host},share={share}")
+    return base / rest if rest else base
+
+
+def _uri_to_path(uri: str) -> Path:
+    scheme = urlparse(uri).scheme
+    if scheme == "file":
+        return Path(urllib.parse.unquote(urlparse(uri).path))
+    if scheme == "smb":
+        return _smb_uri_to_path(uri)
+    # Last-resort fallback: assume cwd is the FUSE mount of the parent
+    base = urllib.parse.unquote(uri.rsplit("/", 1)[-1])
+    return Path(os.getcwd()) / base
+
+
+def get_selected_paths() -> list[Path]:
+    raw_paths = os.environ.get("NAUTILUS_SCRIPT_SELECTED_FILE_PATHS", "")
+    paths = [Path(p) for p in raw_paths.splitlines() if p]
+    if paths:
+        return paths
+    raw_uris = os.environ.get("NAUTILUS_SCRIPT_SELECTED_URIS", "")
+    return [_uri_to_path(u) for u in raw_uris.splitlines() if u]
+
+
+# --------------------------------------------------------------------------- #
+# Clipboard + notifications
+# --------------------------------------------------------------------------- #
+def _clipboard_commands() -> list[list[str]]:
+    """Ordered candidate clipboard-writer commands for this session."""
+    wayland = [["wl-copy"]]
+    x11 = [["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]]
+    # Prefer the session's native tool, but keep the other as a fallback.
+    return (wayland + x11) if os.environ.get("WAYLAND_DISPLAY") else (x11 + wayland)
+
+
+def copy_to_clipboard(data: str) -> None:
+    """Write `data` to the clipboard. Raises RuntimeError if no tool works."""
+    payload = data.encode("utf-8")
+    errors: list[str] = []
+    for cmd in _clipboard_commands():
+        exe = cmd[0]
+        from shutil import which
+        if which(exe) is None:
+            continue
+        try:
+            subprocess.run(cmd, input=payload, check=True)
+            return
+        except (OSError, subprocess.CalledProcessError) as e:
+            errors.append(f"{exe}: {e}")
+    raise RuntimeError(
+        "No working clipboard tool found (need wl-copy, xclip, or xsel).\n"
+        + "\n".join(errors)
+    )
+
+
+def notify(title: str, body: str, *, warn: bool = False) -> None:
+    """Best-effort desktop notification; falls back to zenity, then stderr."""
+    from shutil import which
+    if which("notify-send"):
+        args = ["notify-send"]
+        if warn:
+            args += ["--urgency=critical"]
+        args += [title, body]
+        try:
+            subprocess.run(args, check=False)
+            return
+        except OSError:
+            pass
+    if which("zenity"):
+        kind = "--warning" if warn else "--info"
+        try:
+            subprocess.run(["zenity", kind, f"--title={title}", f"--text={body}"], check=False)
+            return
+        except OSError:
+            pass
+    print(f"{title}: {body}", file=sys.stderr)
+
+
+# --------------------------------------------------------------------------- #
+# Main
+# --------------------------------------------------------------------------- #
+def main() -> int:
+    paths = get_selected_paths()
+    if not paths:
+        notify("Copy contents", "Nothing selected.", warn=True)
+        return 1
+
+    parts: list[str] = []
+    copied_names: list[str] = []
+    skipped_dir = 0
+    skipped_binary = 0
+    skipped_toobig = 0
+    errors = 0
+
+    multiple = len(paths) > 1
+    for p in paths:
+        try:
+            if p.is_dir():
+                skipped_dir += 1
+                continue
+            size = p.stat().st_size
+            if size > MAX_BYTES_PER_FILE:
+                skipped_toobig += 1
+                continue
+            text = p.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            skipped_binary += 1
+            continue
+        except OSError:
+            errors += 1
+            continue
+
+        if multiple:
+            parts.append(f"===== {p.name} =====\n{text}")
+        else:
+            parts.append(text)
+        copied_names.append(p.name)
+
+    if not copied_names:
+        detail = []
+        if skipped_dir:
+            detail.append(f"{skipped_dir} directory(ies)")
+        if skipped_binary:
+            detail.append(f"{skipped_binary} binary file(s)")
+        if skipped_toobig:
+            detail.append(f"{skipped_toobig} oversized file(s)")
+        if errors:
+            detail.append(f"{errors} unreadable file(s)")
+        reason = ", ".join(detail) or "no text files"
+        notify("Copy contents", f"Nothing copied ({reason}).", warn=True)
+        return 1
+
+    payload = "\n\n".join(parts) if multiple else parts[0]
+    try:
+        copy_to_clipboard(payload)
+    except RuntimeError as e:
+        notify("Copy contents", str(e), warn=True)
+        return 1
+
+    # Success summary
+    n = len(copied_names)
+    if n == 1:
+        head = f"Copied contents of “{copied_names[0]}”"
+    else:
+        head = f"Copied contents of {n} files"
+    extras = []
+    if skipped_dir:
+        extras.append(f"{skipped_dir} dir skipped")
+    if skipped_binary:
+        extras.append(f"{skipped_binary} binary skipped")
+    if skipped_toobig:
+        extras.append(f"{skipped_toobig} oversized skipped")
+    if errors:
+        extras.append(f"{errors} unreadable")
+    body = f"{len(payload.encode('utf-8'))} bytes to clipboard"
+    if extras:
+        body += "  (" + ", ".join(extras) + ")"
+    notify("Copy contents", f"{head}\n{body}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

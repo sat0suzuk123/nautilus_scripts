@@ -1,11 +1,11 @@
 # nautilus_scripts
 
-Python 3 rename utilities for GNOME Files (Nautilus), with first-class support
+Python 3 utilities for GNOME Files (Nautilus), with first-class support
 for GVFS-mounted SMB shares.
 
 ## Features
 
-Right-click selected files in Nautilus → Scripts → Rename → …
+### Rename — right-click selected files → Scripts → Rename → …
 
 | Script | What it does |
 | --- | --- |
@@ -16,6 +16,12 @@ Right-click selected files in Nautilus → Scripts → Rename → …
 | `Replace` | Plain-text find/replace within filenames (empty replacement = delete) |
 | `Insert date` | Prepend a date — today / today+time / per-file mtime / custom string |
 | `Flatten directory` | Move every entry from `<dir>/` to its parent, prepended with `<dir>_`; remove empty source dir |
+
+### Clipboard — right-click selected files → Scripts → …
+
+| Script | What it does |
+| --- | --- |
+| `Copy contents` | Copy the text contents of the selected file(s) to the clipboard. One file → its raw text; N files → concatenated with `===== <name> =====` headers. Directories and non-UTF-8/binary files are skipped and reported. Wayland (`wl-copy`) and X11 (`xclip`/`xsel`) aware. |
 
 All operations are **non-overwriting** (`mv -n` semantics) — collisions are
 counted and reported via `zenity`, never silently overwritten.
@@ -38,9 +44,14 @@ mkdir -p ~/.local/share/nautilus/scripts
 cp -r Rename ~/.local/share/nautilus/scripts/
 chmod +x ~/.local/share/nautilus/scripts/Rename/{Add\ prefix,Add\ suffix,Number\ prefix,Remove\ prefix,Replace,Insert\ date,Flatten\ directory}
 # _helpers.py must NOT be executable (so it stays out of the Scripts menu)
+
+# Clipboard tools (self-contained — no _helpers.py dependency)
+install -m 755 "Clipboard/Copy contents" ~/.local/share/nautilus/scripts/
 ```
 
-Requirements: Python 3.8+, `zenity`.
+Requirements: Python 3.8+, `zenity` (Rename scripts). `Copy contents` needs a
+clipboard writer (`wl-copy` on Wayland, or `xclip`/`xsel` on X11) and uses
+`notify-send`/`zenity` for feedback when available.
 
 If new entries don't appear in the Scripts submenu, restart Nautilus:
 
