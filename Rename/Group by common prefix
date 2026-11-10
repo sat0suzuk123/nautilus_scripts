@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Sort the selected items into directories named after their common prefixes.
+
+Items whose names start with the same N characters (N = minimum prefix
+length, default 3) form one group. Each group gets a directory named after
+the longest prefix the whole group shares, cut back to a word boundary, and
+its items are moved into it with their names unchanged. Items that share
+their first N characters with no other selected item stay where they are.
+
+  minimum prefix length 3:
+    IMG_2023_01.jpg, IMG_2023_02.jpg, IMG_2024_01.jpg   -> IMG/
+    report_a.pdf, report_b.pdf                          -> report/
+    notes.txt                                           -> (left in place)
+
+  minimum prefix length 8:
+    IMG_2023_01.jpg, IMG_2023_02.jpg                    -> IMG_2023/
+    IMG_2024_01.jpg                                     -> (left in place)
+
+The dialog shows the resulting groups. Type another number to regroup; press
+OK without changing it to move the files.
+
+Non-overwriting: an item is skipped if the destination already exists.
+"""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _helpers import dialog_entry, dialog_warning, get_selected_paths, report, safe_rename
+
+# %%
+# Constants
+
+TITLE = "Group by common prefix"
+DEFAULT_MINIMUM_PREFIX_LENGTH = 3
+# A group is only worth a directory when it holds at least this many items.
+MINIMUM_GROUP_SIZE = 2
+# Characters that end a "word" in a filename. A common prefix that stops in the
+# middle of a word is cut back to the last one of these.
+SEPARATORS = "_-. "
+# Groups listed in the dialog before the rest is summarised as "... and N more".
+MAXIMUM_PREVIEW_GROUPS = 12
+
+
+# %%
+# Helper functions
+
+def name_directory(names: list[str], minimum_prefix_length: int) -> str:
+    """Directory name for one group of filenames.
+
+    Parameters
+    ----------
+    names : list[str]
+        Basenames of one group; all share their first `minimum_prefix_length`
+        characters (guaranteed by `group_paths`, which builds the groups).
+    minimum_prefix_length : int
+        The returned name is never shorter than this.
+
+    Returns
+    -------
+    str
+        The longest common leading string, cut back to a word boundary and
+        with trailing separators removed, as long as that keeps at least
+        `minimum_prefix_length` characters.
+
+    Notes
+    -----
+    The prefix is at a word boundary when, in every name, it is followed by a
+    separator or by the end of the name. Otherwise it is cut back to the last
+    separator it contains (`IMG_2023_0` -> `IMG_2023`); a prefix containing no
+    separator is kept whole (`report1`, `report2` -> `report`).
+    """
+    common = os.path.commonprefix(names)
+    at_boundary = all(
+        len(name) == len(common) or name[len(common)] in SEPARATORS
+        for name in names
+    )
+    trimmed = common
+    if not at_boundary and not common.endswith(tuple(SEPARATORS)):
+        last_separator = max(common.rfind(separator) for separator in SEPARATORS)
+        if last_separator > 0:
+            trimmed = common[:last_separator]
+    trimmed = trimmed.rstrip(SEPARATORS)
+    if len(trimmed) >= minimum_prefix_length:
+        return trimmed
+    # Trimming would go below the minimum: drop only as many trailing
+    # separators as the minimum allows (`common` itself always satisfies it).
+    kept_length = max(minimum_prefix_length, len(common.rstrip(SEPARATORS)))
+    return common[:kept_length]
+
+
+def group_paths(paths: list[Path], minimum_prefix_length: int) -> tuple[dict[Path, list[Path]], list[Path]]:
+    """Partition `paths` into target directories.
+
+    Parameters
+    ----------
+    paths : list[Path]
+        The selected items.
+    minimum_prefix_length : int
+        Items are grouped when they are in the same parent directory and their
+        names start with the same `minimum_prefix_length` characters
+        (case-sensitive).
+
+    Returns
+    -------
+    groups : dict[Path, list[Path]]
+        Target directory -> items to move into it, in selection order. Target
+        directories are distinct: two groups differ within their first
+        `minimum_prefix_length` characters and each name keeps at least that many.
+    ungrouped : list[Path]
+        Items with a name shorter than the minimum, or sharing their first
+        characters with fewer than MINIMUM_GROUP_SIZE selected items.
+    """
+    by_key: dict[tuple[Path, str], list[Path]] = {}
+    ungrouped: list[Path] = []
+    for path in paths:
+        if len(path.name) < minimum_prefix_length:
+            ungrouped.append(path)
+            continue
+        by_key.setdefault((path.parent, path.name[:minimum_prefix_length]), []).append(path)
+
+    groups: dict[Path, list[Path]] = {}
+    for (parent, _), members in by_key.items():
+        if len(members) < MINIMUM_GROUP_SIZE:
+            ungrouped.extend(members)
+            continue
+        directory_name = name_directory([member.name for member in members], minimum_prefix_length)
+        groups[parent / directory_name] = members
+    assert sum(len(members) for members in groups.values()) + len(ungrouped) == len(paths)
+    return groups, ungrouped
+
+
+def describe_plan(groups: dict[Path, list[Path]], ungrouped: list[Path], minimum_prefix_length: int) -> str:
+    """Dialog text: the groups that would be created, and how to proceed."""
+    lines = [f"Minimum prefix length {minimum_prefix_length}:"]
+    listed = list(groups.items())[:MAXIMUM_PREVIEW_GROUPS]
+    for target_dir, members in listed:
+        lines.append(f"  {target_dir.name}/  ({len(members)} items)")
+    if len(groups) > len(listed):
+        lines.append(f"  ... and {len(groups) - len(listed)} more directories")
+    if not groups:
+        lines.append("  (no group: no items share a prefix of this length)")
+    if ungrouped:
+        lines.append(f"  left in place: {len(ungrouped)} items")
+    lines.append("")
+    lines.append("OK = move the files. Change the number to regroup.")
+    return "\n".join(lines)
+
+
+def move_into_directory(src: Path, target_dir: Path) -> str:
+    """Move `src` into `target_dir`, creating it if needed.
+
+    Returns
+    -------
+    str
+        One of "moved", "exists" (destination already present), "is_target"
+        (`src` is the target directory itself), "error".
+    """
+    if src == target_dir:
+        return "is_target"
+    try:
+        target_dir.mkdir(exist_ok=True)
+    except OSError:
+        # Includes: a non-directory with that name already exists.
+        return "error"
+    dst = target_dir / src.name
+    try:
+        if dst.exists():
+            return "exists"
+    except OSError:
+        return "error"
+    return "moved" if safe_rename(src, dst) else "error"
+
+
+# %%
+# Main
+
+def main() -> int:
+    paths = get_selected_paths()
+    if not paths:
+        dialog_warning(TITLE, "Nothing selected.")
+        return 1
+
+    # Re-prompt until the number is confirmed unchanged (or the dialog is cancelled).
+    minimum_prefix_length = DEFAULT_MINIMUM_PREFIX_LENGTH
+    while True:
+        groups, ungrouped = group_paths(paths, minimum_prefix_length)
+        answer = dialog_entry(
+            TITLE,
+            describe_plan(groups, ungrouped, minimum_prefix_length),
+            str(minimum_prefix_length),
+        )
+        if answer is None:
+            return 0
+        if not answer.strip().isdecimal() or int(answer) < 1:
+            dialog_warning(TITLE, f"Minimum prefix length must be a whole number of 1 or more: {answer!r}")
+            continue
+        if int(answer) == minimum_prefix_length:
+            break
+        minimum_prefix_length = int(answer)
+
+    if not groups:
+        dialog_warning(TITLE, "Nothing moved: no items share a prefix of this length.")
+        return 0
+
+    outcomes = [
+        move_into_directory(src, target_dir)
+        for target_dir, members in groups.items()
+        for src in members
+    ]
+    report(TITLE, {
+        f"Moved into {len(groups)} directories": outcomes.count("moved"),
+        "Left in place (no group)": len(ungrouped),
+        "Skipped (target exists)": outcomes.count("exists"),
+        "Skipped (is the target directory)": outcomes.count("is_target"),
+        "Failed (could not create directory or move)": outcomes.count("error"),
+    })
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

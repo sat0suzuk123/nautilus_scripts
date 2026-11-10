@@ -10,9 +10,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _helpers import get_selected_paths, report, safe_rename, zenity_entry
+from _helpers import get_selected_paths, report, safe_rename, dialog_entry
 
-sep = zenity_entry("Remove prefix", "Separator that ends the prefix:", "_")
+sep = dialog_entry("Remove prefix", "Separator that ends the prefix:", "_")
 if not sep:
     sys.exit()
 

@@ -4,12 +4,12 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _helpers import get_selected_paths, report, safe_rename, zenity_entry
+from _helpers import get_selected_paths, report, safe_rename, dialog_entry
 
-search = zenity_entry("Replace", "Search for:")
+search = dialog_entry("Replace", "Search for:")
 if not search:
     sys.exit()
-replace = zenity_entry("Replace", "Replace with (empty = delete):")
+replace = dialog_entry("Replace", "Replace with (empty = delete):")
 if replace is None:
     sys.exit()
 

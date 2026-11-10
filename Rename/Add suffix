@@ -9,9 +9,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _helpers import get_selected_paths, report, safe_rename, zenity_entry
+from _helpers import get_selected_paths, report, safe_rename, dialog_entry
 
-suffix = zenity_entry("Add suffix", "Suffix (inserted before extension):")
+suffix = dialog_entry("Add suffix", "Suffix (inserted before extension):")
 if not suffix:
     sys.exit()
 

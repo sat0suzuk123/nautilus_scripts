@@ -1,7 +1,8 @@
 # nautilus_scripts
 
 Python 3 utilities for GNOME Files (Nautilus), with first-class support
-for GVFS-mounted SMB shares.
+for GVFS-mounted SMB shares. The same scripts also run on macOS as Finder
+Quick Actions (see [macOS](#macos)).
 
 ## Features
 
@@ -16,6 +17,7 @@ for GVFS-mounted SMB shares.
 | `Replace` | Plain-text find/replace within filenames (empty replacement = delete) |
 | `Insert date` | Prepend a date — today / today+time / per-file mtime / custom string |
 | `Flatten directory` | Move every entry from `<dir>/` to its parent, prepended with `<dir>_`; remove empty source dir |
+| `Group by common prefix` | Sort the selected items into several directories at once: items whose names start with the same N characters (minimum prefix length, default 3, adjustable in the dialog, which previews the groups) go into a directory named after their shared prefix, cut back to a word boundary. Names are kept; items with no partner stay in place. |
 
 ### Clipboard — right-click selected files → Scripts → …
 
@@ -42,22 +44,55 @@ Currently `smb://` and `file://` are supported. Other schemes fall back to
 ```sh
 mkdir -p ~/.local/share/nautilus/scripts
 cp -r Rename ~/.local/share/nautilus/scripts/
-chmod +x ~/.local/share/nautilus/scripts/Rename/{Add\ prefix,Add\ suffix,Number\ prefix,Remove\ prefix,Replace,Insert\ date,Flatten\ directory}
+chmod +x ~/.local/share/nautilus/scripts/Rename/{Add\ prefix,Add\ suffix,Number\ prefix,Remove\ prefix,Replace,Insert\ date,Flatten\ directory,Group\ by\ common\ prefix}
 # _helpers.py must NOT be executable (so it stays out of the Scripts menu)
 
 # Clipboard tools (self-contained — no _helpers.py dependency)
 install -m 755 "Clipboard/Copy contents" ~/.local/share/nautilus/scripts/
 ```
 
-Requirements: Python 3.8+, `zenity` (Rename scripts). `Copy contents` needs a
-clipboard writer (`wl-copy` on Wayland, or `xclip`/`xsel` on X11) and uses
-`notify-send`/`zenity` for feedback when available.
+Requirements (Linux): Python 3.8+, `zenity` (Rename scripts). `Copy contents`
+needs a clipboard writer (`wl-copy` on Wayland, or `xclip`/`xsel` on X11) and
+uses `notify-send`/`zenity` for feedback when available.
 
 If new entries don't appear in the Scripts submenu, restart Nautilus:
 
 ```sh
 nautilus -q
 ```
+
+## macOS
+
+The scripts take the selection from the command-line arguments when the
+Nautilus environment variables are absent, and use `osascript` dialogs,
+`pbcopy` and Notification Center instead of `zenity`, `wl-copy`/`xclip` and
+`notify-send`. No extra packages are needed; the system `/usr/bin/python3`
+(3.9) is enough.
+
+Finder has no scripts folder, so each script is registered as a Quick Action.
+The installer does this for every executable in `Rename/` and `Clipboard/`:
+
+```sh
+python3 install_quick_actions.py
+```
+
+It writes one `<script name>.workflow` per script into `~/Library/Services/`
+(Quick Action, receives files or folders in Finder, runs the script with the
+selection as arguments). They appear under right-click → Quick Actions; which
+ones are shown can be changed in System Settings → Keyboard → Keyboard
+Shortcuts → Services.
+
+* The workflows hold the absolute path of this checkout. Re-run the installer
+  after moving the repository or adding a script.
+* Re-running replaces only workflows the installer created; a same-named
+  workflow of yours is left alone and reported.
+* To uninstall, delete the `.workflow` bundles from `~/Library/Services/`.
+
+The same scripts can be run from a terminal on either platform:
+`"Rename/Add prefix" file1 file2`.
+
+SMB shares need no special handling on macOS: Finder mounts them under
+`/Volumes/`, so the paths passed to the scripts are ordinary paths.
 
 ## Diagnostics
 

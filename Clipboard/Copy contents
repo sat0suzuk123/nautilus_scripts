@@ -3,7 +3,8 @@
 
 Self-contained (no _helpers.py dependency) so it can live in any Scripts
 subfolder. Supports local files and GVFS-mounted URIs (smb://, sftp://, …),
-Wayland (wl-copy) and X11 (xclip / xsel).
+Wayland (wl-copy), X11 (xclip / xsel) and macOS (pbcopy; selection passed as
+command-line arguments by a Finder Quick Action).
 
 Behaviour:
   * 1 text file   -> its raw contents go to the clipboard.
@@ -24,6 +25,10 @@ from urllib.parse import urlparse
 
 # Skip files larger than this to avoid stuffing the clipboard with a huge blob.
 MAX_BYTES_PER_FILE = 10 * 1024 * 1024  # 10 MiB
+IS_MACOS = sys.platform == "darwin"
+OSA_NOTIFY = """on run argv
+    display notification (item 2 of argv) with title (item 1 of argv)
+end run"""
 
 
 # --------------------------------------------------------------------------- #
@@ -60,7 +65,11 @@ def get_selected_paths() -> list[Path]:
     if paths:
         return paths
     raw_uris = os.environ.get("NAUTILUS_SCRIPT_SELECTED_URIS", "")
-    return [_uri_to_path(u) for u in raw_uris.splitlines() if u]
+    paths = [_uri_to_path(u) for u in raw_uris.splitlines() if u]
+    if paths:
+        return paths
+    # Not launched by Nautilus (macOS Quick Action, terminal): argv is the selection.
+    return [Path(a) for a in sys.argv[1:] if a]
 
 
 # --------------------------------------------------------------------------- #
@@ -68,6 +77,8 @@ def get_selected_paths() -> list[Path]:
 # --------------------------------------------------------------------------- #
 def _clipboard_commands() -> list[list[str]]:
     """Ordered candidate clipboard-writer commands for this session."""
+    if IS_MACOS:
+        return [["pbcopy"]]
     wayland = [["wl-copy"]]
     x11 = [["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]]
     # Prefer the session's native tool, but keep the other as a fallback.
@@ -89,7 +100,7 @@ def copy_to_clipboard(data: str) -> None:
         except (OSError, subprocess.CalledProcessError) as e:
             errors.append(f"{exe}: {e}")
     raise RuntimeError(
-        "No working clipboard tool found (need wl-copy, xclip, or xsel).\n"
+        "No working clipboard tool found (need wl-copy, xclip, xsel, or pbcopy on macOS).\n"
         + "\n".join(errors)
     )
 
@@ -97,6 +108,14 @@ def copy_to_clipboard(data: str) -> None:
 def notify(title: str, body: str, *, warn: bool = False) -> None:
     """Best-effort desktop notification; falls back to zenity, then stderr."""
     from shutil import which
+    if IS_MACOS:
+        # Values go through argv, so no AppleScript quoting is needed.
+        try:
+            result = subprocess.run(["osascript", "-e", OSA_NOTIFY, title, body], check=False)
+            if result.returncode == 0:
+                return
+        except OSError:
+            pass
     if which("notify-send"):
         args = ["notify-send"]
         if warn:

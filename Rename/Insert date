@@ -12,13 +12,13 @@ import sys
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _helpers import get_selected_paths, report, safe_rename, zenity_entry, zenity_radio
+from _helpers import get_selected_paths, report, safe_rename, dialog_entry, dialog_radio
 
 now = datetime.now()
 today = now.strftime("%Y-%m-%d")
 today_time = now.strftime("%Y-%m-%d_%H%M")
 
-choice = zenity_radio(
+choice = dialog_radio(
     "Insert date",
     "Which date to use?",
     [
@@ -38,7 +38,7 @@ elif choice == "Today (with time)":
 elif choice == "File mtime":
     fixed = None
 elif choice == "Custom...":
-    fixed = zenity_entry("Insert date", "Date string:", today)
+    fixed = dialog_entry("Insert date", "Date string:", today)
     if not fixed:
         sys.exit()
 else:
